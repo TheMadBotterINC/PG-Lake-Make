@@ -1,14 +1,13 @@
-version: "3.9"
-
 services:
-  # Postgres with pg_lake extension baked in
   postgres:
-    image: ghcr.io/snowflake-labs/pg_lake-postgres:latest
+    # Build locally instead of pulling from ghcr
+    build:
+      context: /opt/pg-lake-src/docker/postgres
     container_name: pg_lake-postgres
     environment:
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"     # expose publicly; firewall as needed
+      - "0.0.0.0:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./pg_init:/docker-entrypoint-initdb.d:ro
@@ -18,9 +17,10 @@ services:
       timeout: 5s
       retries: 10
 
-  # DuckDB server that pg_lake uses to read Parquet/S3
   pgduck_server:
-    image: ghcr.io/snowflake-labs/pgduck_server:latest
+    # Build locally instead of pulling from ghcr
+    build:
+      context: /opt/pg-lake-src/docker/pgduck_server
     container_name: pgduck_server
     environment:
       DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
@@ -29,7 +29,6 @@ services:
     depends_on:
       - minio
 
-  # MinIO (S3-compatible object storage)
   minio:
     image: quay.io/minio/minio:latest
     container_name: minio
@@ -38,8 +37,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"     # S3 API
-      - "9001:9001"     # Web console
+      - "0.0.0.0:9000:9000"
+      - "0.0.0.0:9001:9001"
     volumes:
       - minio:/data
     healthcheck:
@@ -48,25 +47,12 @@ services:
       timeout: 5s
       retries: 20
 
-  # one-shot: create bucket & make it world-readable (for easy testing)
-  minio-setup:
-    image: quay.io/minio/mc:latest
-    container_name: minio_setup
-    depends_on:
-      - minio
-    entrypoint: /bin/sh -c
-    command: >
-      "mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
-       mc mb -p local/opdi &&
-       mc anonymous set download local/opdi || true"
-    restart: "no"
-
-  # one-shot: generate a Parquet file into MinIO (synthetic MRO-ish events)
+  # one-shot: seed parquet to MinIO (after bucket exists)
   parquet-seed:
     image: duckdb/duckdb:latest
     container_name: parquet_seed
     depends_on:
-      - minio-setup
+      - minio
     volumes:
       - ./duckdb_init.sql:/init/duckdb_init.sql:ro
       - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
