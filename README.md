@@ -152,5 +152,5 @@ SeaweedFS S3 gateway → `http://<droplet_ip>:8333`
 
 ## 🐙 Credits
 
-Built with ❤️ by humans + A🤖\
+Built with ❤️ by humans + a 🤖\
 Inspired by Snowflake-Labs' `pg_lake` and DuckDB's Parquet engine.
