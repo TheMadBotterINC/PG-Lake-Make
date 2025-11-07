@@ -42,8 +42,8 @@ your flavor.
 
 ``` bash
 # clone the repo
-git clone https://github.com/<owner>/pg_lake-make.git
-cd pg_lake-make
+git clone https://github.com/TheMadBotterINC/PG-Lake-Make.git
+cd PG-Lake-Make
 
 # bring up the default (MinIO) stack
 make up
@@ -130,8 +130,7 @@ SeaweedFS S3 gateway → `http://<droplet_ip>:8333`
 
 ## 🧠 Notes
 
--   Replace `<owner>` in the compose files with your GitHub org/user
-    once images are public on GHCR.\
+-   Images are automatically built and published to GHCR via GitHub Actions.\
 -   Each compose file is self-contained; no rebuilds or submodules
     needed.
 -   MinIO's default creds: `minioadmin / minioadmin`.
