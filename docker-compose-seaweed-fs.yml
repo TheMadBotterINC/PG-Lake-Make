@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  # SeaweedFS master (cluster metadata)
+  seaweed-master:
+    image: chrislusf/seaweedfs:latest
+    command: "master -ip=seaweed-master -port=9333"
+    ports:
+      - "9333:9333"
+    volumes:
+      - seaweed-master:/data
+
+  # SeaweedFS volume server (stores objects)
+  seaweed-volume:
+    image: chrislusf/seaweedfs:latest
+    command: "volume -mserver=seaweed-master:9333 -ip=seaweed-volume -port=8080 -dir=/data"
+    depends_on: [seaweed-master]
+    ports:
+      - "8080:8080"
+    volumes:
+      - seaweed-volume:/data
+
+  # SeaweedFS S3 gateway (S3-compatible API)
+  seaweed-s3:
+    image: chrislusf/seaweedfs:latest
+    command: >
+      s3 -port=8333
+         -config=/etc/seaweedfs/s3.json
+         -master=seaweed-master:9333
+    depends_on: [seaweed-master, seaweed-volume]
+    ports:
+      - "8333:8333"
+    volumes:
+      - ./seaweed/s3.json:/etc/seaweedfs/s3.json:ro
+
+  # ✅ pgduck_server should start AFTER the S3 endpoint is up
+  pgduck_server:
+    depends_on: [seaweed-s3]
+    environment:
+      DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
+    volumes:
+      - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
+
+  # parquet-seed now writes into SeaweedFS S3 (not MinIO)
+  parquet-seed:
+    image: duckdb/duckdb:latest
+    depends_on: [seaweed-s3]
+    volumes:
+      - ./duckdb_init.sql:/init/duckdb_init.sql:ro
+      - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
+    entrypoint: /bin/sh -c "duckdb -init=/init/duckdb_init.sql -batch /dev/null < /seed/seed.duckdb.sql"
+    restart: "no"
+
+volumes:
+  seaweed-master:
+  seaweed-volume:
