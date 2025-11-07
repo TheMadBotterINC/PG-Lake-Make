@@ -12,45 +12,73 @@ services:
     ports: ["8080:8080"]
     volumes: [ "seaweed-volume:/data" ]
 
+  seaweed-filer:
+    image: chrislusf/seaweedfs:latest
+    command: "filer -master=seaweed-master:9333 -ip=seaweed-filer"
+    depends_on: [seaweed-master, seaweed-volume]
+    ports: ["8888:8888"]
+
   seaweed-s3:
     image: chrislusf/seaweedfs:latest
-    command: >
-      s3 -port=8333 -config=/etc/seaweedfs/s3.json -master=seaweed-master:9333
-    depends_on: [seaweed-master, seaweed-volume]
+    command: "s3 -port=8333 -filer=seaweed-filer:8888"
+    depends_on: [seaweed-filer]
     ports: ["8333:8333"]
-    volumes:
-      - ./seaweed/s3.json:/etc/seaweedfs/s3.json:ro
 
   postgres:
     image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
     container_name: pg_lake-postgres
+    user: postgres
+    command: /home/postgres/pgsql-18/bin/postgres -D /home/postgres/pgsql-18/data
     environment:
       POSTGRES_PASSWORD: postgres
     ports: ["0.0.0.0:5432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "/home/postgres/pgsql-18/bin/pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 10
-    depends_on: [pgduck_server]
 
   pgduck_server:
     image: ghcr.io/themadbotterinc/pgduck_server:latest
     container_name: pgduck_server
+    user: postgres
+    command: /home/postgres/pgsql-18/bin/pgduck_server
     environment:
       DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
     volumes:
-      - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
+      - ./duckdb_init_seaweed.sql:/duckdb_init/duckdb_init.sql:ro
+    depends_on:
+      seaweed-s3:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  create-bucket:
+    image: amazon/aws-cli:latest
+    container_name: create_bucket
     depends_on: [seaweed-s3]
+    environment:
+      AWS_ACCESS_KEY_ID: any
+      AWS_SECRET_ACCESS_KEY: any
+      AWS_EC2_METADATA_DISABLED: "true"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep 10 && aws --endpoint-url=http://seaweed-s3:8333 s3 mb s3://opdi --region us-east-1 || exit 0"]
+    restart: "no"
 
   parquet-seed:
-    image: duckdb/duckdb:latest
+    image: python:3.11-slim
     container_name: parquet_seed
-    depends_on: [seaweed-s3]
+    depends_on:
+      create-bucket:
+        condition: service_completed_successfully
     volumes:
-      - ./duckdb_init.sql:/init/duckdb_init.sql:ro
+      - ./duckdb_init_seaweed.sql:/init/duckdb_init.sql:ro
       - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
-    entrypoint: /bin/sh -c "duckdb -init=/init/duckdb_init.sql -batch /dev/null < /seed/seed.duckdb.sql"
+    command: >
+      sh -c "pip install -q duckdb &&
+      python -c 'import duckdb; conn = duckdb.connect(); 
+      conn.execute(open(\"/init/duckdb_init.sql\").read()); 
+      conn.execute(open(\"/seed/seed.duckdb.sql\").read())'"
     restart: "no"
 
 volumes:
