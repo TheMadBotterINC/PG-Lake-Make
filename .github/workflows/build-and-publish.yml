@@ -1,0 +1,98 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - '.github/workflows/build-and-publish.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: themadBotterinc
+
+jobs:
+  build-pg-lake-postgres:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout pg_lake source
+        uses: actions/checkout@v4
+        with:
+          repository: Snowflake-Labs/pg_lake
+          path: pg_lake
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/pg_lake-postgres
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push pg_lake-postgres
+        uses: docker/build-push-action@v5
+        with:
+          context: ./pg_lake/docker
+          file: ./pg_lake/docker/Dockerfile
+          target: pg_lake_postgres
+          build-args: |
+            BASE_IMAGE_OS=almalinux
+            BASE_IMAGE_TAG=9
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  build-pgduck-server:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout pg_lake source
+        uses: actions/checkout@v4
+        with:
+          repository: Snowflake-Labs/pg_lake
+          path: pg_lake
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/pgduck_server
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push pgduck_server
+        uses: docker/build-push-action@v5
+        with:
+          context: ./pg_lake/docker
+          file: ./pg_lake/docker/Dockerfile
+          target: pgduck_server
+          build-args: |
+            BASE_IMAGE_OS=almalinux
+            BASE_IMAGE_TAG=9
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
