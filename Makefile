@@ -1,8 +1,6 @@
 # Makefile at repo root
-MODE ?= minio   # or seaweed
+MODE ?= minio            # valid: minio, seaweed-fs
 FILE := docker-compose-$(MODE).yml
-
-# For local-build mode, you can do: make up MODE=minio.build
 compose := docker compose -f $(FILE)
 
 .PHONY: up
@@ -31,7 +29,3 @@ logs:
 .PHONY: psql
 psql:
 	@docker exec -it $$(docker ps -qf "name=pg_lake-postgres") psql -U postgres
-
-.PHONY: clean
-clean:
-	docker compose -f $(FILE) down -v --remove-orphans

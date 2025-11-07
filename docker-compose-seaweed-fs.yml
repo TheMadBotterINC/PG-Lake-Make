@@ -23,6 +23,7 @@ services:
 
   pgduck_server:
     image: ghcr.io/<owner>/pgduck_server:latest
+    container_name: pgduck_server
     environment:
       DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
     volumes:
@@ -31,6 +32,7 @@ services:
 
   parquet-seed:
     image: duckdb/duckdb:latest
+    container_name: parquet_seed
     depends_on: [seaweed-s3]
     volumes:
       - ./duckdb_init.sql:/init/duckdb_init.sql:ro
