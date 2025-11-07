@@ -5,114 +5,21 @@ packages:
   - jq
   - ufw
   - ca-certificates
+  - git
 
 write_files:
-  - path: /etc/docker/daemon.json
-    content: |
-      { "log-driver": "json-file", "log-opts": { "max-size": "50m", "max-file": "3" } }
-
-  - path: /opt/pg-lake/docker-compose.yml
-    content: |
-      version: "3.9"
-      services:
-        # === Postgres with pg_lake ===
-        postgres:
-          image: ghcr.io/snowflake-labs/pg_lake-postgres:latest
-          container_name: pg_lake-postgres
-          environment:
-            POSTGRES_PASSWORD: postgres
-          ports:
-            - "0.0.0.0:5432:5432"
-          volumes:
-            - pgdata:/var/lib/postgresql/data
-            - ./pg_init:/docker-entrypoint-initdb.d:ro
-          healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U postgres"]
-            interval: 10s
-            timeout: 5s
-            retries: 10
-
-        # === SeaweedFS ===
-        seaweed-master:
-          image: chrislusf/seaweedfs:latest
-          container_name: seaweed-master
-          command: "master -ip=seaweed-master -port=9333"
-          # no public port mapping (internal only)
-          volumes:
-            - seaweed-master:/data
-
-        seaweed-volume:
-          image: chrislusf/seaweedfs:latest
-          container_name: seaweed-volume
-          command: "volume -mserver=seaweed-master:9333 -ip=seaweed-volume -port=8080 -dir=/data"
-          depends_on: [seaweed-master]
-          # no public port mapping (internal only)
-          volumes:
-            - seaweed-volume:/data
-
-        seaweed-s3:
-          image: chrislusf/seaweedfs:latest
-          container_name: seaweed-s3
-          command: >
-            s3 -port=8333
-               -config=/etc/seaweedfs/s3.json
-               -master=seaweed-master:9333
-          depends_on: [seaweed-master, seaweed-volume]
-          ports:
-            - "0.0.0.0:8333:8333"
-          volumes:
-            - ./seaweed/s3.json:/etc/seaweedfs/s3.json:ro
-
-        # === DuckDB server used by pg_lake ===
-        pgduck_server:
-          image: ghcr.io/snowflake-labs/pgduck_server:latest
-          container_name: pgduck_server
-          environment:
-            DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
-          volumes:
-            - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
-          depends_on: [seaweed-s3]
-
-        # === One-shot: generate Parquet into SeaweedFS S3 ===
-        parquet-seed:
-          image: duckdb/duckdb:latest
-          container_name: parquet_seed
-          depends_on: [seaweed-s3]
-          volumes:
-            - ./duckdb_init.sql:/init/duckdb_init.sql:ro
-            - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
-          entrypoint: /bin/sh -c "duckdb -init=/init/duckdb_init.sql -batch /dev/null < /seed/seed.duckdb.sql"
-          restart: "no"
-
-      volumes:
-        pgdata:
-        seaweed-master:
-        seaweed-volume:
-
+  # DuckDB S3 config for SeaweedFS S3 gateway
   - path: /opt/pg-lake/duckdb_init.sql
     content: |
-      -- SeaweedFS S3 gateway (HTTP)
-      SET s3_endpoint = 'seaweed-s3:8333';
+      SET s3_endpoint = '127.0.0.1:8333';
       SET s3_url_style = 'path';
       SET s3_use_ssl = false;
       SET s3_region = 'us-east-1';
-
-      -- must match seaweed/s3.json
       SET s3_access_key_id = 'pg_lake_access';
       SET s3_secret_access_key = 'pg_lake_secret';
 
-  - path: /opt/pg-lake/pg_init/00_pg_lake.sql
-    content: |
-      CREATE EXTENSION IF NOT EXISTS pg_lake CASCADE;
-      CREATE SERVER IF NOT EXISTS pg_lake_srv
-        FOREIGN DATA WRAPPER pg_lake_table;
-
-      -- Foreign table over Parquet in SeaweedFS (created by the seed job)
-      CREATE FOREIGN TABLE IF NOT EXISTS mro_events_parquet()
-        SERVER pg_lake_srv
-        OPTIONS ( path 's3://opdi/flight_list/mro_events.parquet' );
-
-  - path: /opt/pg-lake/seaweed/s3.json
+  # SeaweedFS S3 credentials
+  - path: /opt/pg-lake/s3.json
     content: |
       {
         "identities": [
@@ -126,31 +33,64 @@ write_files:
         ]
       }
 
-  - path: /opt/pg-lake/seed/seed.duckdb.sql
+  # Override compose to inject DUCKDB_INIT_FILE + bind mount
+  - path: /opt/pg-lake/override.yml
+    content: |
+      services:
+        pgduck_server:
+          environment:
+            DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
+          volumes:
+            - /opt/pg-lake/duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
+
+  # Seed SQL (same as MinIO)
+  - path: /opt/pg-lake/seed.duckdb.sql
     content: |
       CREATE OR REPLACE TABLE mro_events AS
       SELECT
-        1000 + row_number() OVER ()                                AS event_id,
-        ('N' || lpad(cast(100 + (random()*899)::int as varchar),3,'0')) AS tail_number,
-        date '2025-01-01' + (random()*180)::int                   AS event_date,
+        1000 + row_number() OVER () AS event_id,
+        ('N' || lpad(cast(100 + (random()*899)::int as varchar), 3, '0')) AS tail_number,
+        date '2025-01-01' + (random()*180)::int AS event_date,
         ['A-CHECK','B-CHECK','C-CHECK','UNSCHEDULED','AOG'][(random()*4)::int+1] AS event_type,
-        ['ATL','TPA','JFK','DFW','LHR'][(random()*4)::int+1]      AS station,
+        ['ATL','TPA','JFK','DFW','LHR'][(random()*4)::int+1] AS station,
         ['HYDRAULIC_LEAK','BRAKE_WEAR','AVIONICS_FAULT','CORROSION','ENGINE_OIL'][(random()*4)::int+1] AS fault_code,
-        round(1 + random()*48, 1)                                 AS downtime_hours,
-        round(500 + random()*150000, 2)                           AS cost_usd
+        round(1 + random()*48, 1) AS downtime_hours,
+        round(500 + random()*150000, 2) AS cost_usd
       FROM range(50000);
-
-      -- Write to SeaweedFS via S3 gateway (bucket auto-creates on PUT)
       COPY (SELECT * FROM mro_events)
       TO 's3://opdi/flight_list/mro_events.parquet' (FORMAT PARQUET);
 
 runcmd:
+  # Docker
   - bash -lc 'curl -fsSL https://get.docker.com | sh'
   - bash -lc 'usermod -aG docker root || true'
   - bash -lc 'systemctl enable docker && systemctl start docker'
+
+  # Firewall
   - bash -lc 'ufw allow OpenSSH'
-  - bash -lc 'ufw allow 5432'     # Postgres
-  - bash -lc 'ufw allow 8333'     # Seaweed S3 gateway
+  - bash -lc 'ufw allow 5432'   # Postgres
+  - bash -lc 'ufw allow 8333'   # SeaweedFS S3 gateway
   - bash -lc 'ufw --force enable'
-  - bash -lc 'cd /opt/pg-lake && docker compose up -d --wait'
-  - bash -lc 'cd /opt/pg-lake && docker compose up parquet-seed --no-deps --abort-on-container-exit'
+
+  # Clone pg_lake source
+  - bash -lc 'git clone https://github.com/Snowflake-Labs/pg_lake.git /opt/pg_lake_src'
+
+  # Start SeaweedFS: master, volume, S3 gateway
+  - bash -lc "docker run -d --restart=unless-stopped --name seaweed-master -v /opt/seaweed/master:/data chrislusf/seaweedfs:latest master -ip=127.0.0.1 -port=9333"
+  - bash -lc "docker run -d --restart=unless-stopped --name seaweed-volume -v /opt/seaweed/volume:/data chrislusf/seaweedfs:latest volume -mserver=127.0.0.1:9333 -ip=127.0.0.1 -port=8080 -dir=/data"
+  - bash -lc "docker run -d --restart=unless-stopped --name seaweed-s3 -p 0.0.0.0:8333:8333 -v /opt/pg-lake/s3.json:/etc/seaweedfs/s3.json:ro chrislusf/seaweedfs:latest s3 -port=8333 -config=/etc/seaweedfs/s3.json -master=127.0.0.1:9333"
+
+  # Wait for S3 gateway
+  - bash -lc 'for i in {1..30}; do nc -z 127.0.0.1 8333 && break || sleep 2; done'
+
+  # Build and start pg_lake stack (with override for duckdb_init.sql)
+  - bash -lc 'cd /opt/pg_lake_src/docker && docker compose -f docker-compose.yml -f /opt/pg-lake/override.yml build'
+  - bash -lc 'cd /opt/pg_lake_src/docker && docker compose -f docker-compose.yml -f /opt/pg-lake/override.yml up -d'
+
+  # Seed Parquet into SeaweedFS via DuckDB
+  - bash -lc "docker run --rm --network=host -v /opt/pg-lake/duckdb_init.sql:/init.sql:ro -v /opt/pg-lake/seed.duckdb.sql:/seed.sql:ro duckdb/duckdb:latest duckdb -init=/init.sql -batch /dev/null < /seed.sql"
+
+  # Create pg_lake foreign table
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE EXTENSION IF NOT EXISTS pg_lake CASCADE;\""
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE SERVER IF NOT EXISTS pg_lake_srv FOREIGN DATA WRAPPER pg_lake_table;\""
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE FOREIGN TABLE IF NOT EXISTS mro_events_parquet() SERVER pg_lake_srv OPTIONS (path 's3://opdi/flight_list/mro_events.parquet');\""
