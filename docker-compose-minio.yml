@@ -1,16 +1,10 @@
 services:
   postgres:
-    # Build locally instead of pulling from ghcr
-    build:
-      context: /opt/pg-lake-src/docker/postgres
+    image: ghcr.io/<owner>/pg_lake-postgres:latest
     container_name: pg_lake-postgres
     environment:
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "0.0.0.0:5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./pg_init:/docker-entrypoint-initdb.d:ro
+    ports: ["0.0.0.0:5432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -18,16 +12,13 @@ services:
       retries: 10
 
   pgduck_server:
-    # Build locally instead of pulling from ghcr
-    build:
-      context: /opt/pg-lake-src/docker/pgduck_server
+    image: ghcr.io/<owner>/pgduck_server:latest
     container_name: pgduck_server
     environment:
       DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
     volumes:
       - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
-    depends_on:
-      - minio
+    depends_on: [minio]
 
   minio:
     image: quay.io/minio/minio:latest
@@ -36,9 +27,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "0.0.0.0:9000:9000"
-      - "0.0.0.0:9001:9001"
+    ports: ["0.0.0.0:9000:9000","0.0.0.0:9001:9001"]
     volumes:
       - minio:/data
     healthcheck:
@@ -47,12 +36,10 @@ services:
       timeout: 5s
       retries: 20
 
-  # one-shot: seed parquet to MinIO (after bucket exists)
   parquet-seed:
     image: duckdb/duckdb:latest
     container_name: parquet_seed
-    depends_on:
-      - minio
+    depends_on: [minio]
     volumes:
       - ./duckdb_init.sql:/init/duckdb_init.sql:ro
       - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
@@ -60,5 +47,4 @@ services:
     restart: "no"
 
 volumes:
-  pgdata:
   minio:
