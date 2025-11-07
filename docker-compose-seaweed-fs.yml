@@ -22,7 +22,7 @@ services:
       - ./seaweed/s3.json:/etc/seaweedfs/s3.json:ro
 
   postgres:
-    image: ghcr.io/themadBotterinc/pg_lake-postgres:latest
+    image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
     container_name: pg_lake-postgres
     environment:
       POSTGRES_PASSWORD: postgres
@@ -35,7 +35,7 @@ services:
     depends_on: [pgduck_server]
 
   pgduck_server:
-    image: ghcr.io/themadBotterinc/pgduck_server:latest
+    image: ghcr.io/themadbotterinc/pgduck_server:latest
     container_name: pgduck_server
     environment:
       DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
