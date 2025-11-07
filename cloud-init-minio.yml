@@ -2,68 +2,13 @@
 package_update: true
 packages:
   - curl
-  - unzip
   - jq
   - ufw
   - ca-certificates
+  - git
 
 write_files:
-  - path: /etc/docker/daemon.json
-    content: |
-      { "log-driver": "json-file", "log-opts": { "max-size": "50m", "max-file": "3" } }
-
-  - path: /opt/pg-lake/docker-compose.yml
-    content: |
-      version: "3.9"
-      services:
-        postgres:
-          image: ghcr.io/snowflake-labs/pg_lake-postgres:latest
-          environment:
-            POSTGRES_PASSWORD: postgres
-          ports:
-            - "0.0.0.0:5432:5432"
-          volumes:
-            - pgdata:/var/lib/postgresql/data
-            - ./pg_init:/docker-entrypoint-initdb.d:ro
-          healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U postgres"]
-            interval: 10s
-            timeout: 5s
-            retries: 10
-
-        pgduck_server:
-          image: ghcr.io/snowflake-labs/pgduck_server:latest
-          environment:
-            DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
-          volumes:
-            - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
-          depends_on: [minio]
-
-        minio:
-          image: quay.io/minio/minio:latest
-          command: server /data --console-address ":9001"
-          environment:
-            MINIO_ROOT_USER: minioadmin
-            MINIO_ROOT_PASSWORD: minioadmin
-          ports:
-            - "0.0.0.0:9000:9000"
-            - "0.0.0.0:9001:9001"
-          volumes:
-            - minio:/data
-
-        parquet-seed:
-          image: duckdb/duckdb:latest
-          depends_on: [minio]
-          volumes:
-            - ./duckdb_init.sql:/init/duckdb_init.sql:ro
-            - ./seed.duckdb.sql:/seed/seed.duckdb.sql:ro
-          entrypoint: /bin/sh -c "duckdb -init=/init/duckdb_init.sql -batch /dev/null < /seed/seed.duckdb.sql"
-          restart: "no"
-
-      volumes:
-        pgdata:
-        minio:
-
+  # DuckDB S3 config for MinIO
   - path: /opt/pg-lake/duckdb_init.sql
     content: |
       SET s3_endpoint = 'minio:9000';
@@ -73,15 +18,18 @@ write_files:
       SET s3_access_key_id = 'minioadmin';
       SET s3_secret_access_key = 'minioadmin';
 
-  - path: /opt/pg-lake/pg_init/00_pg_lake.sql
+  # Override compose that injects DUCKDB_INIT_FILE + bind mount
+  - path: /opt/pg-lake/override.yml
     content: |
-      CREATE EXTENSION IF NOT EXISTS pg_lake CASCADE;
-      CREATE SERVER IF NOT EXISTS pg_lake_srv FOREIGN DATA WRAPPER pg_lake_table;
-      CREATE FOREIGN TABLE IF NOT EXISTS mro_events_parquet()
-        SERVER pg_lake_srv
-        OPTIONS ( path 's3://opdi/flight_list/mro_events.parquet' );
+      services:
+        pgduck_server:
+          environment:
+            DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
+          volumes:
+            - /opt/pg-lake/duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
 
-  - path: /opt/pg-lake/seed/seed.duckdb.sql
+  # Seed SQL to generate a test Parquet into MinIO
+  - path: /opt/pg-lake/seed.duckdb.sql
     content: |
       CREATE OR REPLACE TABLE mro_events AS
       SELECT
@@ -93,17 +41,49 @@ write_files:
         ['HYDRAULIC_LEAK','BRAKE_WEAR','AVIONICS_FAULT','CORROSION','ENGINE_OIL'][(random()*4)::int+1] AS fault_code,
         round(1 + random()*48, 1) AS downtime_hours,
         round(500 + random()*150000, 2) AS cost_usd
-      FROM range(5000);
+      FROM range(50000);
       COPY (SELECT * FROM mro_events)
       TO 's3://opdi/flight_list/mro_events.parquet' (FORMAT PARQUET);
 
 runcmd:
+  # Install Docker
   - bash -lc 'curl -fsSL https://get.docker.com | sh'
   - bash -lc 'usermod -aG docker root || true'
   - bash -lc 'systemctl enable docker && systemctl start docker'
+
+  # Firewall
   - bash -lc 'ufw allow OpenSSH'
-  - bash -lc 'ufw allow 5432'
-  - bash -lc 'ufw allow 9000'
-  - bash -lc 'ufw allow 9001'
+  - bash -lc 'ufw allow 5432'  # Postgres
+  - bash -lc 'ufw allow 9000'  # MinIO S3
+  - bash -lc 'ufw allow 9001'  # MinIO Console
   - bash -lc 'ufw --force enable'
-  - bash -lc 'cd /opt/pg-lake && docker compose up -d --wait'
+
+  # Clone pg_lake source for local builds
+  - bash -lc 'git clone https://github.com/Snowflake-Labs/pg_lake.git /opt/pg_lake_src'
+
+  # Bring up MinIO (single container)
+  - bash -lc "docker run -d --restart=unless-stopped --name minio \
+      -p 0.0.0.0:9000:9000 -p 0.0.0.0:9001:9001 \
+      -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+      -v /opt/minio/data:/data \
+      quay.io/minio/minio:latest server /data --console-address ':9001'"
+
+  # Wait for MinIO to be ready
+  - bash -lc 'for i in {1..30}; do curl -sf http://127.0.0.1:9000/minio/health/live && break || sleep 2; done'
+
+  # Create bucket with mc (no shell inside the container)
+  - bash -lc "docker run --rm --network=host quay.io/minio/mc:latest alias set local http://127.0.0.1:9000 minioadmin minioadmin"
+  - bash -lc "docker run --rm --network=host quay.io/minio/mc:latest mb -p local/opdi"
+  - bash -lc "docker run --rm --network=host quay.io/minio/mc:latest anonymous set download local/opdi || true"
+
+  # Build and start pg_lake stack from source with override that mounts duckdb_init.sql
+  - bash -lc 'cd /opt/pg_lake_src/docker && docker compose -f docker-compose.yml -f /opt/pg-lake/override.yml build'
+  - bash -lc 'cd /opt/pg_lake_src/docker && docker compose -f docker-compose.yml -f /opt/pg-lake/override.yml up -d'
+
+  # Seed Parquet via DuckDB container (uses same duckdb_init.sql)
+  - bash -lc "docker run --rm --network=host -v /opt/pg-lake/duckdb_init.sql:/init.sql:ro -v /opt/pg-lake/seed.duckdb.sql:/seed.sql:ro duckdb/duckdb:latest duckdb -init=/init.sql -batch /dev/null < /seed.sql"
+
+  # Create pg_lake foreign table in Postgres
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE EXTENSION IF NOT EXISTS pg_lake CASCADE;\""
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE SERVER IF NOT EXISTS pg_lake_srv FOREIGN DATA WRAPPER pg_lake_table;\""
+  - bash -lc "docker exec $(docker ps -qf name=pg_lake-postgres) psql -U postgres -d postgres -c \"CREATE FOREIGN TABLE IF NOT EXISTS mro_events_parquet() SERVER pg_lake_srv OPTIONS (path 's3://opdi/flight_list/mro_events.parquet');\""
