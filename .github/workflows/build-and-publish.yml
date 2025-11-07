@@ -2,7 +2,7 @@ name: Build and Publish Docker Images
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'docker/**'
       - '.github/workflows/build-and-publish.yml'
