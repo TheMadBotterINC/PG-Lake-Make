@@ -1,6 +1,1 @@
-SET s3_endpoint = 'minio:9000';
-SET s3_url_style = 'path';
-SET s3_use_ssl = false;
-SET s3_region = 'us-east-1';
-SET s3_access_key_id = 'minioadmin';
-SET s3_secret_access_key = 'minioadmin';
+CREATE SECRET s3miniosecret(type s3, scope 's3://opdi', use_ssl false, key_id 'minioadmin', secret 'minioadmin', url_style 'path', endpoint 'minio:9000');
