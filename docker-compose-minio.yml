@@ -2,9 +2,24 @@ services:
   postgres:
     image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
     container_name: pg_lake-postgres
+    user: root
+    command:
+      - /bin/bash
+      - -c
+      - |
+        chown -R postgres:postgres /home/postgres/data
+        if [ ! -d /home/postgres/data/base ]; then
+          su postgres -c "initdb -D /home/postgres/data"
+        fi
+        echo "shared_preload_libraries = 'pg_extension_base'" >> /home/postgres/data/postgresql.conf
+        echo "pg_lake_engine.host = 'host=/home/postgres/pgduck_socket_dir port=5332'" >> /home/postgres/data/postgresql.conf
+        exec su postgres -c "postgres -D /home/postgres/data"
     environment:
       POSTGRES_PASSWORD: postgres
     ports: ["0.0.0.0:5432:5432"]
+    volumes:
+      - postgres-data:/home/postgres/data
+      - pgduck-socket:/home/postgres/pgduck_socket_dir
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -14,10 +29,10 @@ services:
   pgduck_server:
     image: ghcr.io/themadbotterinc/pgduck_server:latest
     container_name: pgduck_server
-    environment:
-      DUCKDB_INIT_FILE: /duckdb_init/duckdb_init.sql
+    command: ["/home/postgres/pg_lake/docker/scripts/entrypoint-pgduck-server.sh"]
     volumes:
-      - ./duckdb_init.sql:/duckdb_init/duckdb_init.sql:ro
+      - ./duckdb_init.sql:/init-pgduck-server.sql:ro
+      - pgduck-socket:/home/postgres/pgduck_socket_dir
     depends_on: [minio]
 
   minio:
@@ -36,15 +51,34 @@ services:
       timeout: 5s
       retries: 20
 
+  create-bucket:
+    image: minio/mc:latest
+    container_name: create_bucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb -p local/opdi || true
+        mc anonymous set download local/opdi || true
+    restart: "no"
+
   parquet-seed:
     image: duckdb/duckdb:latest
     container_name: parquet_seed
-    depends_on: [minio]
+    depends_on:
+      create-bucket:
+        condition: service_completed_successfully
     volumes:
       - ./duckdb_init.sql:/init/duckdb_init.sql:ro
       - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
-    entrypoint: /bin/sh -c "duckdb -init=/init/duckdb_init.sql -batch /dev/null < /seed/seed.duckdb.sql"
+    entrypoint: ["/duckdb"]
+    command: ["-init", "/init/duckdb_init.sql", "-c", ".read /seed/seed.duckdb.sql"]
     restart: "no"
 
 volumes:
   minio:
+  postgres-data:
+  pgduck-socket:
