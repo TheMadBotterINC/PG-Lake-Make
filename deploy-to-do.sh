@@ -100,6 +100,7 @@ echo "📤 Copying configuration files..."
 if [ "$MODE" = "minio" ]; then
     scp docker-compose-minio.yml root@$DROPLET_IP:/opt/pg-lake/docker-compose.yml
     scp duckdb_init.sql root@$DROPLET_IP:/opt/pg-lake/
+    scp .env root@$DROPLET_IP:/opt/pg-lake/
 else
     scp docker-compose-seaweed-fs.yml root@$DROPLET_IP:/opt/pg-lake/docker-compose.yml
     scp duckdb_init_seaweed.sql root@$DROPLET_IP:/opt/pg-lake/duckdb_init_seaweed.sql
