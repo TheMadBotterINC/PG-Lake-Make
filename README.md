@@ -128,6 +128,29 @@ SeaweedFS S3 gateway → `http://<droplet_ip>:8333`
 
 ------------------------------------------------------------------------
 
+## 🔒 Security Notes
+
+-   **Change default credentials** before production use! The default
+    MinIO credentials (`minioadmin/minioadmin`) and PostgreSQL password
+    (`postgres`) are for **development only**.\
+-   Copy `.env.example` to `.env` and customize for your environment:
+    ``` bash
+    cp .env.example .env
+    # Edit .env with your secure credentials
+    ```
+-   Use firewall rules to restrict access to sensitive ports:
+    -   PostgreSQL: `5432`
+    -   MinIO Console: `9001`
+    -   MinIO S3 API: `9000`\
+-   For production deployments:
+    -   Enable SSL/TLS for PostgreSQL connections
+    -   Use strong, unique passwords
+    -   Consider using a secrets manager (e.g., HashiCorp Vault)
+    -   Restrict `pg_hba.conf` to specific IP ranges
+    -   Enable MinIO/SeaweedFS encryption at rest
+
+------------------------------------------------------------------------
+
 ## 🧠 Notes
 
 -   Images are automatically built and published to GHCR via GitHub Actions.\
