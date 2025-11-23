@@ -32,6 +32,8 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
     ports: ["0.0.0.0:5432:5432"]
+    volumes:
+      - postgres-data:/home/postgres/pgsql-18/data
     healthcheck:
       test: ["CMD-SHELL", "/home/postgres/pgsql-18/bin/pg_isready -U postgres"]
       interval: 10s
@@ -53,6 +55,31 @@ services:
       postgres:
         condition: service_healthy
 
+  setup-pgsql-tmp:
+    image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
+    container_name: setup_pgsql_tmp
+    user: root
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - postgres-data:/home/postgres/pgsql-18/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Creating pgsql_tmp directories..."
+        cd /home/postgres/pgsql-18/data/base
+        for db_dir in *; do
+          if [ -d "$db_dir" ]; then
+            mkdir -p "$db_dir/pgsql_tmp"
+            chmod 2777 "$db_dir/pgsql_tmp"
+            chown postgres:postgres "$db_dir/pgsql_tmp"
+            echo "  Created /home/postgres/pgsql-18/data/base/$db_dir/pgsql_tmp"
+          fi
+        done
+        echo "✅ pgsql_tmp directories created"
+    restart: "no"
+
   create-bucket:
     image: amazon/aws-cli:latest
     container_name: create_bucket
@@ -71,6 +98,8 @@ services:
     depends_on:
       create-bucket:
         condition: service_completed_successfully
+      setup-pgsql-tmp:
+        condition: service_completed_successfully
     volumes:
       - ./duckdb_init_seaweed.sql:/init/duckdb_init.sql:ro
       - ./seed/seed.duckdb.sql:/seed/seed.duckdb.sql:ro
@@ -84,3 +113,4 @@ services:
 volumes:
   seaweed-master:
   seaweed-volume:
+  postgres-data:

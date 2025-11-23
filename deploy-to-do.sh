@@ -138,7 +138,7 @@ ENDSSH
 # Step 6: Setup pgsql_tmp directories
 # ==============================================================================
 echo "📁 Setting up pgsql_tmp directories..."
-ssh root@$DROPLET_IP bash <<'ENDSSH'
+ssh root@$DROPLET_IP bash <<ENDSSH
 set -euo pipefail
 
 cd /opt/pg-lake
@@ -147,15 +147,23 @@ cd /opt/pg-lake
 docker compose up setup-pgsql-tmp --abort-on-container-exit
 
 # Fallback: manually create directories if they don't exist
-PG_CONTAINER=$(docker ps -qf "name=pg_lake-postgres")
-docker exec -u root $PG_CONTAINER sh -c '
-  cd /home/postgres/data/base
+PG_CONTAINER=\$(docker ps -qf "name=pg_lake-postgres")
+
+# Determine postgres data path based on mode
+if [ "$MODE" = "minio" ]; then
+  DATA_PATH="/home/postgres/data/base"
+else
+  DATA_PATH="/home/postgres/pgsql-18/data/base"
+fi
+
+docker exec -u root \$PG_CONTAINER sh -c '
+  cd '"\$DATA_PATH"'
   for db_dir in *; do
-    if [ -d "$db_dir" ] && [ ! -d "$db_dir/pgsql_tmp" ]; then
-      mkdir -p "$db_dir/pgsql_tmp"
-      chmod 2777 "$db_dir/pgsql_tmp"
-      chown postgres:postgres "$db_dir/pgsql_tmp"
-      echo "  Created /home/postgres/data/base/$db_dir/pgsql_tmp"
+    if [ -d "\$db_dir" ] && [ ! -d "\$db_dir/pgsql_tmp" ]; then
+      mkdir -p "\$db_dir/pgsql_tmp"
+      chmod 2777 "\$db_dir/pgsql_tmp"
+      chown postgres:postgres "\$db_dir/pgsql_tmp"
+      echo "  Created '"\$DATA_PATH"'/\$db_dir/pgsql_tmp"
     fi
   done
 '
