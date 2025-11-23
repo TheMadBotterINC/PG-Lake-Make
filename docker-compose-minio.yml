@@ -11,10 +11,6 @@ services:
         if [ ! -d /home/postgres/data/base ]; then
           su postgres -c "initdb -D /home/postgres/data"
         fi
-        # Ensure pgsql_tmp exists with correct permissions for pg_lake_iceberg
-        mkdir -p /home/postgres/data/base/pgsql_tmp
-        chmod 2777 /home/postgres/data/base/pgsql_tmp
-        chown postgres:postgres /home/postgres/data/base/pgsql_tmp
         echo "shared_preload_libraries = 'pg_extension_base'" >> /home/postgres/data/postgresql.conf
         echo "pg_lake_engine.host = 'host=/home/postgres/pgduck_socket_dir port=5332'" >> /home/postgres/data/postgresql.conf
         exec su postgres -c "postgres -D /home/postgres/data"
@@ -70,11 +66,38 @@ services:
         mc anonymous set download local/opdi || true
     restart: "no"
 
+  setup-pgsql-tmp:
+    image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
+    container_name: setup_pgsql_tmp
+    user: root
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - postgres-data:/home/postgres/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Creating pgsql_tmp directories..."
+        cd /home/postgres/data/base
+        for db_dir in *; do
+          if [ -d "$db_dir" ]; then
+            mkdir -p "$db_dir/pgsql_tmp"
+            chmod 2777 "$db_dir/pgsql_tmp"
+            chown postgres:postgres "$db_dir/pgsql_tmp"
+            echo "  Created /home/postgres/data/base/$db_dir/pgsql_tmp"
+          fi
+        done
+        echo "✅ pgsql_tmp directories created"
+    restart: "no"
+
   parquet-seed:
     image: duckdb/duckdb:latest
     container_name: parquet_seed
     depends_on:
       create-bucket:
+        condition: service_completed_successfully
+      setup-pgsql-tmp:
         condition: service_completed_successfully
     volumes:
       - ./duckdb_init.sql:/init/duckdb_init.sql:ro
