@@ -55,9 +55,9 @@ services:
       postgres:
         condition: service_healthy
 
-  setup-pgsql-tmp:
+  setup-postgres:
     image: ghcr.io/themadbotterinc/pg_lake-postgres:latest
-    container_name: setup_pgsql_tmp
+    container_name: setup_postgres
     user: root
     depends_on:
       postgres:
@@ -67,6 +67,15 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        echo "Configuring postgres for external connections..."
+        # Enable external TCP connections
+        if ! grep -q "listen_addresses = '\*'" /home/postgres/pgsql-18/data/postgresql.conf; then
+          echo "listen_addresses = '*'" >> /home/postgres/pgsql-18/data/postgresql.conf
+        fi
+        if ! grep -q "host all all 0.0.0.0/0 trust" /home/postgres/pgsql-18/data/pg_hba.conf; then
+          echo "host all all 0.0.0.0/0 trust" >> /home/postgres/pgsql-18/data/pg_hba.conf
+        fi
+        
         echo "Creating pgsql_tmp directories..."
         cd /home/postgres/pgsql-18/data/base
         for db_dir in *; do
@@ -77,7 +86,11 @@ services:
             echo "  Created /home/postgres/pgsql-18/data/base/$db_dir/pgsql_tmp"
           fi
         done
-        echo "✅ pgsql_tmp directories created"
+        
+        # Reload postgres configuration
+        /home/postgres/pgsql-18/bin/pg_ctl reload -D /home/postgres/pgsql-18/data
+        
+        echo "✅ Postgres configured for external access"
     restart: "no"
 
   create-bucket:
@@ -98,7 +111,7 @@ services:
     depends_on:
       create-bucket:
         condition: service_completed_successfully
-      setup-pgsql-tmp:
+      setup-postgres:
         condition: service_completed_successfully
     volumes:
       - ./duckdb_init_seaweed.sql:/init/duckdb_init.sql:ro
